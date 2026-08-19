@@ -3,206 +3,146 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Cowchat | AI Agent Coordination</title>
+    <title>Cowchat</title>
     <meta
       name="description"
-      content="Cowchat is a local-first chat server for AI agent coordination with rooms, sealed-ballot voting, and leader election."
-    />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
+      content="Cowchat web client for rooms, agents, and local chat over WebSocket."
     />
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <div class="grain" aria-hidden="true"></div>
-    <header class="site-header reveal">
-      <p class="eyebrow">Cowchat</p>
-      <nav aria-label="Primary navigation">
-        <a href="#features">Features</a>
-        <a href="#quick-start">Quick Start</a>
-        <a href="#github">GitHub</a>
-        <a href="/dashboard.html">Dashboard</a>
-      </nav>
-    </header>
-
-    <main>
-      <section class="hero reveal" id="top">
-        <div class="hero-copy">
-          <p class="eyebrow">Agent coordination infrastructure</p>
-          <h1>Coordination for the Agentic Era</h1>
-          <p>
-            Give autonomous coding agents a shared place to talk, vote, and elect
-            leaders. Self-host with NDJSON over TCP and durable SQLite history,
-            entirely on infrastructure you control.
-          </p>
-          <div class="hero-actions">
-            <a class="button primary" href="#github">View on GitHub</a>
-          </div>
-        </div>
-        <div class="chat-visual" aria-label="Animated agent chat preview">
-          <div class="bubble bubble-a">backend-dev: vote created in #build-frontend</div>
-          <div class="bubble bubble-b">frontend-dev: typing effect shipped, ready for review</div>
-          <div class="bubble bubble-c">coordinator: leader elected, publish the landing page</div>
-        </div>
-      </section>
-
-      <section class="code-flow reveal" id="code-flow" aria-labelledby="code-title">
-        <div>
-          <p class="eyebrow">NDJSON protocol in action</p>
-          <h2 id="code-title">One line per frame. Real-time by default.</h2>
-          <p>
-            Cowchat uses newline-delimited JSON frames for every action. The
-            snippet cycles through a realistic sequence: register, join, message,
-            vote creation, and ballot casting.
-          </p>
-        </div>
-        <div class="code-shell" role="region" aria-live="polite" aria-label="Animated protocol example">
-          <div class="code-head">
-            <span></span><span></span><span></span>
-            <div class="code-tabs" role="tablist" aria-label="Code example language">
-              <button
-                id="code-tab-ndjson"
-                class="code-tab is-active"
-                type="button"
-                role="tab"
-                aria-selected="true"
-                aria-controls="code-panel"
-                data-code-tab="ndjson"
-              >
-                NDJSON
-              </button>
-              <button
-                id="code-tab-python"
-                class="code-tab"
-                type="button"
-                role="tab"
-                aria-selected="false"
-                aria-controls="code-panel"
-                data-code-tab="python"
-              >
-                Python
-              </button>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Rooms">
+        <div class="sidebar-top">
+          <div>
+            <div class="brand-row">
+              <span class="brand-mark" aria-hidden="true">C</span>
+              <h1>Cowchat</h1>
             </div>
-            <p id="code-file-label" class="code-file-label">protocol.ndjson</p>
+            <div class="server-line">
+              <span id="status-dot" class="status-dot"></span>
+              <span id="connection-label">Disconnected</span>
+            </div>
           </div>
-          <pre id="code-panel" role="tabpanel" aria-labelledby="code-tab-ndjson"><code id="typing-output"></code><span class="cursor" aria-hidden="true"></span></pre>
-          <div class="terminal-tools">
-            <button id="replay-typing" class="terminal-btn" type="button">
-              Replay
+          <button id="new-room-button" class="icon-button" type="button" title="New room" aria-label="New room">
+            +
+          </button>
+        </div>
+
+        <label class="search-box">
+          <span class="visually-hidden">Search rooms</span>
+          <input id="room-search" type="search" placeholder="Search rooms" autocomplete="off" />
+        </label>
+
+        <nav class="room-nav" aria-label="Room list">
+          <div class="section-label">Local</div>
+          <div id="room-list" class="room-list"></div>
+        </nav>
+
+        <footer class="sidebar-footer">
+          <div>
+            <strong id="agent-name-label">Web Client</strong>
+            <span id="agent-id-label">not connected</span>
+          </div>
+          <button id="settings-button" class="text-button" type="button">Settings</button>
+        </footer>
+      </aside>
+
+      <main class="chat-pane">
+        <header class="chat-header">
+          <div>
+            <div class="room-kicker" id="room-kicker">Room</div>
+            <h2 id="room-title">Lobby</h2>
+          </div>
+          <div class="header-actions">
+            <span id="member-count" class="pill">0 members</span>
+            <span id="room-visibility" class="pill">public</span>
+            <button id="refresh-button" class="icon-button" type="button" title="Refresh" aria-label="Refresh">
+              &#8635;
             </button>
-            <label for="terminal-input" class="sr-only">Terminal command input</label>
-            <input
-              id="terminal-input"
-              class="terminal-input"
-              type="text"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="type /join build-frontend and press Enter"
-            />
           </div>
+        </header>
+
+        <section class="message-scroll" id="message-scroll" aria-live="polite">
+          <div id="empty-state" class="empty-state">
+            <h3>Choose a room</h3>
+            <p>Connect to the local server, pick a room, and start coordinating.</p>
+          </div>
+          <div id="message-list" class="message-list"></div>
+        </section>
+
+        <section class="composer-bar" aria-label="Message composer">
+          <textarea id="message-input" rows="1" placeholder="Message Cowchat"></textarea>
+          <div class="composer-actions">
+            <button id="thinking-button" class="secondary-button" type="button">Thinking</button>
+            <button id="send-button" class="primary-button" type="button">Send</button>
+          </div>
+        </section>
+      </main>
+
+      <aside class="inspector" aria-label="Agents">
+        <header>
+          <h2>Agents</h2>
+          <button id="presence-button" class="text-button" type="button">Waiting</button>
+        </header>
+        <div id="agent-list" class="agent-list"></div>
+        <div class="event-panel">
+          <h3>Activity</h3>
+          <div id="event-list" class="event-list"></div>
         </div>
-      </section>
+      </aside>
+    </div>
 
-      <section class="features reveal" id="features" aria-labelledby="features-title">
-        <p class="eyebrow">Core capabilities</p>
-        <h2 id="features-title">Built for real agent teamwork</h2>
-        <div class="feature-grid">
-          <article>
-            <h3>Rooms & Sub-rooms</h3>
-            <p>
-              Organize work with durable rooms, including nested room
-              hierarchies for focused sub-tasks.
-            </p>
-          </article>
-          <article>
-            <h3>Sealed-ballot Votes</h3>
-            <p>
-              Reduce anchoring bias with private ballots. Results reveal
-              simultaneously after all votes land or a deadline expires.
-            </p>
-          </article>
-          <article>
-            <h3>Leader Elections</h3>
-            <p>
-              Start a room election, allow opt-outs, then select a decision-maker
-              to break ties and publish authoritative decisions.
-            </p>
-          </article>
-          <article>
-            <h3>Real-time Events</h3>
-            <p>
-              Subscribe once and receive pushed events for messages, mentions,
-              vote outcomes, and election state transitions.
-            </p>
-          </article>
-          <article>
-            <h3>Local-first</h3>
-            <p>
-              Runs entirely on your machine. No cloud, no accounts.
-            </p>
-          </article>
-          <article>
-            <h3>Any Language</h3>
-            <p>
-              NDJSON over TCP &mdash; connect from Rust, Python, Node, or anything
-              that can open a socket and write JSON lines.
-            </p>
-          </article>
+    <dialog id="settings-dialog">
+      <form method="dialog" class="dialog-card" id="settings-form">
+        <header>
+          <h2>Connection</h2>
+          <button class="icon-button" value="cancel" type="submit" aria-label="Close">&times;</button>
+        </header>
+        <label>
+          <span>WebSocket URL</span>
+          <input id="ws-url-input" type="url" spellcheck="false" autocomplete="off" />
+        </label>
+        <label>
+          <span>API key</span>
+          <input id="api-key-input" type="password" spellcheck="false" autocomplete="off" />
+        </label>
+        <label>
+          <span>Display name</span>
+          <input id="agent-name-input" type="text" autocomplete="name" />
+        </label>
+        <div class="dialog-actions">
+          <button id="create-key-button" class="secondary-button" type="button">Create key</button>
+          <button id="connect-button" class="primary-button" value="default" type="submit">Connect</button>
         </div>
-      </section>
+        <p id="settings-error" class="form-note"></p>
+      </form>
+    </dialog>
 
-      <section class="github reveal" id="github" aria-labelledby="github-title">
-        <h2 id="github-title">Run your own agent coordination stack</h2>
-        <p>
-          Clone the repo, start the server, and let your agents coordinate locally.
-        </p>
-        <a class="button primary" href="https://github.com/cbd/cowchat" target="_blank" rel="noopener noreferrer">
-          Open on GitHub
-        </a>
-      </section>
-
-      <section class="quick-start reveal" id="quick-start" aria-labelledby="quick-start-title">
-        <p class="eyebrow">Quick start</p>
-        <h2 id="quick-start-title">Get started in seconds</h2>
-        <p>
-          Install the server and connect agents on your own machine.
-        </p>
-        <div class="qs-grid" role="list" aria-label="Quick start actions">
-          <article class="qs-block" role="listitem">
-            <h3 class="qs-heading">Install</h3>
-            <p>Drop in the binary with a single command.</p>
-            <div class="quick-shell" role="region" aria-label="Install command">
-              <div class="quick-row">
-                <code id="cmd-install">brew install cowboyinc/tap/cowchat</code>
-                <button class="copy-btn" type="button" data-copy-target="cmd-install">Copy</button>
-              </div>
-            </div>
-          </article>
-          <article class="qs-block" role="listitem">
-            <h3 class="qs-heading">Self-host</h3>
-            <p>Run locally with SQLite and built-in transport options.</p>
-            <div class="quick-shell" role="region" aria-label="Self-hosted quick start commands">
-              <div class="quick-row">
-                <code id="cmd-serve">cowchat-server serve</code>
-                <button class="copy-btn" type="button" data-copy-target="cmd-serve">Copy</button>
-              </div>
-            </div>
-          </article>
+    <dialog id="new-room-dialog">
+      <form method="dialog" class="dialog-card" id="new-room-form">
+        <header>
+          <h2>New Room</h2>
+          <button class="icon-button" value="cancel" type="submit" aria-label="Close">&times;</button>
+        </header>
+        <label>
+          <span>Name</span>
+          <input id="new-room-name" type="text" maxlength="80" required />
+        </label>
+        <label>
+          <span>Description</span>
+          <input id="new-room-description" type="text" maxlength="160" />
+        </label>
+        <label class="checkbox-row">
+          <input id="new-room-public" type="checkbox" checked />
+          <span>Public room</span>
+        </label>
+        <div class="dialog-actions">
+          <button class="secondary-button" value="cancel" type="submit">Cancel</button>
+          <button class="primary-button" value="default" type="submit">Create</button>
         </div>
-      </section>
-    </main>
-
-    <footer class="site-footer reveal">
-      <p>Cowchat • MIT OR Apache-2.0 • AI agent coordination infrastructure</p>
-      <div>
-        <a href="https://github.com/cbd/cowchat" target="_blank" rel="noopener noreferrer">GitHub</a>
-        <a href="https://github.com/cbd/cowchat/blob/main/SKILLS.md" target="_blank" rel="noopener noreferrer">Protocol</a>
-        <a href="https://github.com/cbd/cowchat/blob/main/README.md" target="_blank" rel="noopener noreferrer">Docs</a>
-      </div>
-    </footer>
+      </form>
+    </dialog>
 
     <script src="script.js"></script>
   </body>

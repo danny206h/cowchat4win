@@ -1,241 +1,635 @@
-const revealNodes = document.querySelectorAll(".reveal");
-const typingOutput = document.getElementById("typing-output");
-const replayButton = document.getElementById("replay-typing");
-const terminalInput = document.getElementById("terminal-input");
-const codeTabs = document.querySelectorAll("[data-code-tab]");
-const codePanel = document.getElementById("code-panel");
-const codeFileLabel = document.getElementById("code-file-label");
-const copyButtons = document.querySelectorAll("[data-copy-target]");
+const STORAGE_KEY = "cowchat.web.v1";
+const PROTOCOL_VERSION = 2;
 
-const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const $ = (id) => document.getElementById(id);
 
-const ndjsonFrames = [
-  '{"id":"req-1","type":"register","payload":{"key":"***","name":"backend-dev","capabilities":["coordination","content"],"protocol_version":2}}',
-  '{"id":"req-2","type":"join_room","payload":{"room_id":"build-frontend"}}',
-  '{"id":"req-3","type":"send_message","payload":{"room_id":"build-frontend","content":"backend content blocks complete"}}',
-  '{"id":"req-4","type":"create_vote","payload":{"room_id":"build-frontend","title":"Hero headline","options":["Your Agents, Connected.","AI Agents That Talk to Each Other","Coordination for the Agentic Era"]}}',
-  '{"id":"req-5","type":"cast_vote","payload":{"vote_id":"f6f6194f-46a7-4782-a1fd-7a2da7c9092b","option_index":2}}',
-  '{"type":"vote_result","payload":{"room_id":"build-frontend","title":"Hero headline","tally":[{"option_text":"Coordination for the Agentic Era","count":2}]}}'
-];
+const els = {
+  statusDot: $("status-dot"),
+  connectionLabel: $("connection-label"),
+  roomList: $("room-list"),
+  roomSearch: $("room-search"),
+  roomTitle: $("room-title"),
+  roomKicker: $("room-kicker"),
+  roomVisibility: $("room-visibility"),
+  memberCount: $("member-count"),
+  messageScroll: $("message-scroll"),
+  messageList: $("message-list"),
+  emptyState: $("empty-state"),
+  messageInput: $("message-input"),
+  sendButton: $("send-button"),
+  thinkingButton: $("thinking-button"),
+  refreshButton: $("refresh-button"),
+  settingsButton: $("settings-button"),
+  newRoomButton: $("new-room-button"),
+  agentNameLabel: $("agent-name-label"),
+  agentIdLabel: $("agent-id-label"),
+  agentList: $("agent-list"),
+  eventList: $("event-list"),
+  presenceButton: $("presence-button"),
+  settingsDialog: $("settings-dialog"),
+  settingsForm: $("settings-form"),
+  wsUrlInput: $("ws-url-input"),
+  apiKeyInput: $("api-key-input"),
+  agentNameInput: $("agent-name-input"),
+  createKeyButton: $("create-key-button"),
+  settingsError: $("settings-error"),
+  newRoomDialog: $("new-room-dialog"),
+  newRoomForm: $("new-room-form"),
+  newRoomName: $("new-room-name"),
+  newRoomDescription: $("new-room-description"),
+  newRoomPublic: $("new-room-public"),
+};
 
-const pythonFrames = [
-  'from cowchat import Agent, read_api_key',
-  'key = read_api_key()',
-  'agent = Agent(key, "python-dev")',
-  'agent.join_room("build-frontend")',
-  'agent.send_message("build-frontend", "Python client connected")',
-  'for event in agent.listen():',
-  '    print(event["type"], event["payload"])'
-];
+const defaultWsUrl = () => {
+  const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${scheme}//${window.location.host}/ws`;
+};
 
-let activeTab = "ndjson";
-let runId = 0;
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function currentFrames() {
-  return activeTab === "python" ? pythonFrames : ndjsonFrames;
-}
-
-function currentFilename() {
-  return activeTab === "python" ? "examples/python/simple_chat.py" : "protocol.ndjson";
-}
-
-function activateReveals() {
-  if (prefersReducedMotion || !("IntersectionObserver" in window)) {
-    revealNodes.forEach((node) => node.classList.add("visible"));
-    return;
+const loadSettings = () => {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+  } catch {
+    return {};
   }
+};
 
-  const observer = new IntersectionObserver(
-    (entries, obs) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add("visible");
-          obs.unobserve(entry.target);
-        }
-      });
-    },
-    { threshold: 0.22 }
+const saveSettings = () => {
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({
+      wsUrl: state.wsUrl,
+      apiKey: state.apiKey,
+      agentName: state.agentName,
+      agentId: state.agentId,
+    }),
   );
+};
 
-  revealNodes.forEach((node) => observer.observe(node));
+const existing = loadSettings();
+const state = {
+  ws: null,
+  connected: false,
+  pending: new Map(),
+  rooms: [],
+  agents: [],
+  messages: new Map(),
+  joinedRooms: new Set(),
+  unread: new Map(),
+  selectedRoomId: "lobby",
+  wsUrl: existing.wsUrl || defaultWsUrl(),
+  apiKey: existing.apiKey || "",
+  agentName: existing.agentName || "Web Client",
+  agentId:
+    existing.agentId ||
+    `web-${crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)}`,
+  filter: "",
+  presence: "waiting",
+};
+
+function frame(type, payload = {}) {
+  return {
+    id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+    type,
+    payload,
+  };
 }
 
-function updateTabUi() {
-  codeTabs.forEach((tab) => {
-    const isActive = tab.dataset.codeTab === activeTab;
-    tab.classList.toggle("is-active", isActive);
-    tab.setAttribute("aria-selected", String(isActive));
-    if (isActive && codePanel) {
-      codePanel.setAttribute("aria-labelledby", tab.id);
-    }
+function send(type, payload = {}, timeoutMs = 12000) {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    return Promise.reject(new Error("Not connected"));
+  }
+
+  const request = frame(type, payload);
+  const promise = new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      state.pending.delete(request.id);
+      reject(new Error(`${type} timed out`));
+    }, timeoutMs);
+    state.pending.set(request.id, { resolve, reject, timer });
   });
 
-  if (codeFileLabel) {
-    codeFileLabel.textContent = currentFilename();
+  state.ws.send(JSON.stringify(request));
+  return promise;
+}
+
+function resolvePending(message) {
+  if (!message.reply_to || !state.pending.has(message.reply_to)) {
+    return false;
   }
 
-  if (terminalInput) {
-    terminalInput.placeholder =
-      activeTab === "python"
-        ? "switch to NDJSON tab for /join, /send, /vote"
-        : "type /join build-frontend and press Enter";
+  const pending = state.pending.get(message.reply_to);
+  window.clearTimeout(pending.timer);
+  state.pending.delete(message.reply_to);
+  if (message.type === "error") {
+    const detail = message.payload?.message || message.payload?.code || "Request failed";
+    pending.reject(new Error(detail));
+  } else {
+    pending.resolve(message);
+  }
+  return true;
+}
+
+function setConnected(connected, label, isError = false) {
+  state.connected = connected;
+  els.statusDot.classList.toggle("connected", connected);
+  els.statusDot.classList.toggle("error", isError);
+  els.connectionLabel.textContent = label;
+  els.sendButton.disabled = !connected;
+  els.thinkingButton.disabled = !connected;
+  els.newRoomButton.disabled = !connected;
+}
+
+function addEvent(text) {
+  const item = document.createElement("div");
+  item.textContent = `${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} ${text}`;
+  els.eventList.prepend(item);
+  while (els.eventList.children.length > 24) {
+    els.eventList.lastElementChild.remove();
   }
 }
 
-async function typeFrames(frames, { loop = true } = {}) {
-  runId += 1;
-  const thisRun = runId;
-  if (!typingOutput) {
+function upsertRoom(room) {
+  const idx = state.rooms.findIndex((item) => item.room_id === room.room_id);
+  if (idx >= 0) {
+    state.rooms[idx] = { ...state.rooms[idx], ...room };
+  } else {
+    state.rooms.push(room);
+  }
+  sortRooms();
+}
+
+function sortRooms() {
+  state.rooms.sort((a, b) => {
+    if (a.room_id === "lobby") return -1;
+    if (b.room_id === "lobby") return 1;
+    const aTime = Date.parse(a.last_activity || a.created_at || 0);
+    const bTime = Date.parse(b.last_activity || b.created_at || 0);
+    return bTime - aTime || a.name.localeCompare(b.name);
+  });
+}
+
+function selectedRoom() {
+  return state.rooms.find((room) => room.room_id === state.selectedRoomId) || null;
+}
+
+function renderRooms() {
+  const needle = state.filter.trim().toLowerCase();
+  const rooms = state.rooms.filter((room) => {
+    const haystack = `${room.name} ${room.description || ""}`.toLowerCase();
+    return !needle || haystack.includes(needle);
+  });
+
+  els.roomList.innerHTML = "";
+  if (!rooms.length) {
+    const empty = document.createElement("div");
+    empty.className = "room-meta";
+    empty.style.padding = "10px 8px";
+    empty.textContent = state.connected ? "No rooms found" : "Connect to load rooms";
+    els.roomList.append(empty);
     return;
   }
 
-  typingOutput.textContent = "";
+  for (const room of rooms) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `room-row${room.room_id === state.selectedRoomId ? " active" : ""}`;
+    button.addEventListener("click", () => selectRoom(room.room_id));
 
-  if (prefersReducedMotion) {
-    typingOutput.textContent = frames.join("\n");
+    const text = document.createElement("div");
+    text.innerHTML = `<div class="room-name"></div><div class="room-meta"></div>`;
+    text.querySelector(".room-name").textContent = room.name;
+    text.querySelector(".room-meta").textContent =
+      room.room_id === "lobby" ? "Shared lobby" : room.description || room.visibility || "room";
+    button.append(text);
+
+    const unread = state.unread.get(room.room_id) || 0;
+    if (unread > 0) {
+      const badge = document.createElement("span");
+      badge.className = "unread-pill";
+      badge.textContent = unread > 99 ? "99+" : String(unread);
+      button.append(badge);
+    }
+
+    els.roomList.append(button);
+  }
+}
+
+function renderHeader() {
+  const room = selectedRoom();
+  els.roomTitle.textContent = room?.name || "Lobby";
+  els.roomKicker.textContent = room?.room_id === "lobby" ? "Pinned" : "Room";
+  els.roomVisibility.textContent = room?.encrypted
+    ? "encrypted"
+    : room?.visibility || "public";
+  const count = room?.member_count ?? 0;
+  els.memberCount.textContent = `${count} ${count === 1 ? "member" : "members"}`;
+}
+
+function renderMessages() {
+  const messages = state.messages.get(state.selectedRoomId) || [];
+  els.messageList.innerHTML = "";
+  els.emptyState.style.display = messages.length ? "none" : "block";
+  els.emptyState.querySelector("h3").textContent = selectedRoom()?.name || "Choose a room";
+  els.emptyState.querySelector("p").textContent = state.connected
+    ? "No messages here yet."
+    : "Connect to the local server, pick a room, and start coordinating.";
+
+  for (const message of messages) {
+    const article = document.createElement("article");
+    const isMine = message.agent_id === state.agentId;
+    const isThinking = message.metadata?.type === "thinking";
+    article.className = `message${isMine ? " mine" : ""}${isThinking ? " thinking" : ""}`;
+
+    const head = document.createElement("div");
+    head.className = "message-head";
+
+    const author = document.createElement("span");
+    author.className = "message-author";
+    author.textContent = message.agent_name || message.agent_id || "agent";
+
+    const time = document.createElement("span");
+    time.className = "message-time";
+    time.textContent = message.timestamp
+      ? new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      : "";
+
+    const content = document.createElement("div");
+    content.className = "message-content";
+    content.textContent = message.content || "";
+
+    head.append(author, time);
+    article.append(head, content);
+    els.messageList.append(article);
+  }
+}
+
+function renderAgents() {
+  els.agentList.innerHTML = "";
+  if (!state.agents.length) {
+    const empty = document.createElement("div");
+    empty.className = "room-meta";
+    empty.textContent = state.connected ? "No agents visible" : "Not connected";
+    els.agentList.append(empty);
     return;
   }
 
-  for (const frame of frames) {
-    for (const ch of frame) {
-      if (thisRun !== runId) {
-        return;
+  for (const agent of state.agents) {
+    const row = document.createElement("div");
+    row.className = "agent-row";
+    const name = document.createElement("div");
+    name.className = "agent-name";
+    name.textContent = agent.name || agent.agent_id;
+    const status = document.createElement("div");
+    status.className = "agent-status";
+    status.textContent = agent.status_detail || agent.status || "online";
+    row.append(name, status);
+    els.agentList.append(row);
+  }
+}
+
+function renderAll() {
+  els.agentNameLabel.textContent = state.agentName;
+  els.agentIdLabel.textContent = state.agentId;
+  renderRooms();
+  renderHeader();
+  renderMessages();
+  renderAgents();
+}
+
+async function refreshRooms() {
+  if (!state.connected) return;
+  try {
+    const response = await send("list_rooms", {});
+    state.rooms = response.payload?.rooms || [];
+    sortRooms();
+    if (!state.rooms.some((room) => room.room_id === state.selectedRoomId)) {
+      state.selectedRoomId = state.rooms[0]?.room_id || "lobby";
+    }
+    await ensureJoined(state.selectedRoomId);
+    await loadHistory(state.selectedRoomId);
+    renderAll();
+  } catch (error) {
+    addEvent(error.message);
+  }
+}
+
+async function refreshAgents() {
+  if (!state.connected) return;
+  try {
+    const response = await send("list_agents", state.selectedRoomId ? { room_id: state.selectedRoomId } : {});
+    state.agents = response.payload?.agents || [];
+    renderAgents();
+  } catch (error) {
+    addEvent(error.message);
+  }
+}
+
+async function ensureJoined(roomId) {
+  if (!roomId || state.joinedRooms.has(roomId)) return;
+  await send("join_room", { room_id: roomId });
+  state.joinedRooms.add(roomId);
+  addEvent(`Joined ${selectedRoom()?.name || roomId}`);
+}
+
+async function loadHistory(roomId) {
+  if (!roomId || !state.connected) return;
+  try {
+    const response = await send("get_history", { room_id: roomId, limit: 100 });
+    const messages = response.payload?.messages || [];
+    state.messages.set(roomId, messages);
+    renderMessages();
+    scrollToBottom();
+  } catch (error) {
+    addEvent(error.message);
+  }
+}
+
+async function selectRoom(roomId) {
+  state.selectedRoomId = roomId;
+  state.unread.delete(roomId);
+  renderAll();
+  if (state.connected) {
+    try {
+      await ensureJoined(roomId);
+      await Promise.all([loadHistory(roomId), refreshAgents()]);
+    } catch (error) {
+      addEvent(error.message);
+    }
+  }
+}
+
+function appendMessage(message) {
+  const list = state.messages.get(message.room_id) || [];
+  if (!list.some((item) => item.message_id === message.message_id)) {
+    list.push(message);
+    list.sort((a, b) => (a.seq || 0) - (b.seq || 0));
+  }
+  state.messages.set(message.room_id, list);
+
+  const room = state.rooms.find((item) => item.room_id === message.room_id);
+  if (room) {
+    room.last_activity = message.timestamp || new Date().toISOString();
+  }
+  sortRooms();
+
+  if (message.room_id !== state.selectedRoomId) {
+    state.unread.set(message.room_id, (state.unread.get(message.room_id) || 0) + 1);
+  }
+}
+
+function handleServerFrame(message) {
+  if (resolvePending(message)) return;
+
+  switch (message.type) {
+    case "message_received":
+    case "thinking":
+      appendMessage(message.payload);
+      renderAll();
+      if (message.payload.room_id === state.selectedRoomId) scrollToBottom();
+      break;
+    case "room_created":
+    case "room_updated":
+      upsertRoom(message.payload);
+      renderAll();
+      addEvent(`${message.payload.name || "Room"} updated`);
+      break;
+    case "room_destroyed":
+      state.rooms = state.rooms.filter((room) => room.room_id !== message.payload.room_id);
+      if (state.selectedRoomId === message.payload.room_id) {
+        state.selectedRoomId = state.rooms[0]?.room_id || "lobby";
       }
-      typingOutput.textContent += ch;
-      await sleep(12 + Math.random() * 24);
-    }
-    if (thisRun !== runId) {
-      return;
-    }
-    typingOutput.textContent += "\n";
-    await sleep(260);
-  }
-
-  if (loop && thisRun === runId) {
-    await sleep(1400);
-    typeFrames(currentFrames(), { loop: true });
+      renderAll();
+      break;
+    case "agent_joined":
+    case "agent_left":
+    case "presence_update":
+    case "turn_changed":
+      refreshRooms();
+      refreshAgents();
+      break;
+    case "ping":
+      state.ws?.send(JSON.stringify({ type: "pong", payload: {} }));
+      break;
+    case "error":
+      addEvent(message.payload?.message || "Server error");
+      break;
+    default:
+      break;
   }
 }
 
-function shellResponse(command) {
-  const normalized = command.trim().toLowerCase();
-
-  if (!normalized) {
-    return '{"type":"error","payload":{"code":"invalid_payload","message":"empty command"}}';
+async function connect() {
+  if (state.ws) {
+    state.ws.close();
   }
 
-  if (normalized.startsWith("/join")) {
-    const roomName = command.split(/\s+/).slice(1).join(" ") || "lobby";
-    return `{"type":"ok","payload":{"joined":"${roomName}"}}`;
-  }
+  state.wsUrl = els.wsUrlInput.value.trim() || defaultWsUrl();
+  state.apiKey = els.apiKeyInput.value.trim();
+  state.agentName = els.agentNameInput.value.trim() || "Web Client";
+  saveSettings();
+  setConnected(false, "Connecting");
+  els.settingsError.textContent = "";
 
-  if (normalized.startsWith("/send")) {
-    return '{"type":"message_received","payload":{"room_id":"build-frontend","agent_name":"backend-dev"}}';
-  }
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(state.wsUrl);
+    state.ws = ws;
 
-  if (normalized.startsWith("/vote")) {
-    return '{"type":"ok","payload":{"votes_cast":3,"eligible_voters":3}}';
-  }
+    const fail = (message) => {
+      setConnected(false, message, true);
+      reject(new Error(message));
+    };
 
-  return '{"type":"error","payload":{"code":"unknown_command","message":"try /join, /send, /vote"}}';
-}
-
-function interactiveFrames(command) {
-  if (activeTab === "python") {
-    return [
-      ...pythonFrames.slice(0, 4),
-      `# $ ${command}`,
-      'print("Use NDJSON tab for shell-style command simulation")'
-    ];
-  }
-
-  return [...ndjsonFrames.slice(0, 3), `$ ${command}`, shellResponse(command)];
-}
-
-function wireCodeTabs() {
-  codeTabs.forEach((tab) => {
-    tab.addEventListener("click", () => {
-      const nextTab = tab.dataset.codeTab;
-      if (!nextTab || nextTab === activeTab) {
-        return;
-      }
-      activeTab = nextTab;
-      updateTabUi();
-      typeFrames(currentFrames(), { loop: true });
-    });
-  });
-}
-
-function wireTerminalControls() {
-  replayButton?.addEventListener("click", () => {
-    typeFrames(currentFrames(), { loop: true });
-    terminalInput?.focus();
-  });
-
-  terminalInput?.addEventListener("keydown", async (event) => {
-    if (event.key !== "Enter") {
-      return;
-    }
-
-    event.preventDefault();
-    const command = terminalInput.value.trim();
-    if (!command) {
-      return;
-    }
-
-    terminalInput.value = "";
-
-    const customFrames = interactiveFrames(command);
-    await typeFrames(customFrames, { loop: false });
-    await sleep(1000);
-    typeFrames(currentFrames(), { loop: true });
-  });
-}
-
-async function copyText(text) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-
-  const scratch = document.createElement("textarea");
-  scratch.value = text;
-  document.body.appendChild(scratch);
-  scratch.select();
-  document.execCommand("copy");
-  scratch.remove();
-}
-
-function wireCopyButtons() {
-  copyButtons.forEach((button) => {
-    button.addEventListener("click", async () => {
-      const targetId = button.getAttribute("data-copy-target");
-      const commandNode = targetId ? document.getElementById(targetId) : null;
-      const text = commandNode?.textContent?.trim();
-      if (!text) {
-        return;
-      }
-
-      const originalText = button.textContent;
+    ws.addEventListener("open", async () => {
       try {
-        await copyText(text);
-        button.textContent = "Copied";
-      } catch {
-        button.textContent = "Failed";
+        await send("register", {
+          key: state.apiKey,
+          agent_id: state.agentId,
+          name: state.agentName,
+          capabilities: ["web-ui", "html-client"],
+          reconnect: true,
+          protocol_version: PROTOCOL_VERSION,
+        });
+        setConnected(true, "Connected");
+        saveSettings();
+        addEvent("Connected");
+        await send("set_presence", { status: state.presence });
+        await refreshRooms();
+        await refreshAgents();
+        renderAll();
+        resolve();
+      } catch (error) {
+        ws.close();
+        fail(error.message);
       }
-
-      window.setTimeout(() => {
-        button.textContent = originalText;
-      }, 1200);
     });
+
+    ws.addEventListener("message", (event) => {
+      try {
+        handleServerFrame(JSON.parse(event.data));
+      } catch {
+        addEvent("Received unreadable frame");
+      }
+    });
+
+    ws.addEventListener("close", () => {
+      state.pending.forEach(({ reject: rejectPending, timer }) => {
+        window.clearTimeout(timer);
+        rejectPending(new Error("Connection closed"));
+      });
+      state.pending.clear();
+      state.joinedRooms.clear();
+      setConnected(false, "Disconnected");
+      renderAll();
+    });
+
+    ws.addEventListener("error", () => fail("Connection failed"));
   });
 }
 
-activateReveals();
-updateTabUi();
-wireCodeTabs();
-wireTerminalControls();
-wireCopyButtons();
-typeFrames(currentFrames(), { loop: true });
+async function sendComposer(asThinking = false) {
+  const content = els.messageInput.value.trim();
+  const roomId = state.selectedRoomId;
+  if (!content || !roomId) return;
+
+  els.messageInput.value = "";
+  autosizeComposer();
+  try {
+    await ensureJoined(roomId);
+    const response = await send(asThinking ? "thinking" : "send_message", {
+      room_id: roomId,
+      content,
+      metadata: asThinking ? { type: "thinking" } : {},
+      mentions: [],
+    });
+    appendMessage(response.payload);
+    renderAll();
+    scrollToBottom();
+  } catch (error) {
+    els.messageInput.value = content;
+    autosizeComposer();
+    addEvent(error.message);
+  }
+}
+
+async function createRoom() {
+  const name = els.newRoomName.value.trim();
+  if (!name) return;
+
+  try {
+    const response = await send("create_room", {
+      name,
+      description: els.newRoomDescription.value.trim() || null,
+      public: els.newRoomPublic.checked,
+      encrypted: false,
+    });
+    upsertRoom(response.payload);
+    state.selectedRoomId = response.payload.room_id;
+    els.newRoomDialog.close();
+    els.newRoomForm.reset();
+    renderAll();
+    await ensureJoined(state.selectedRoomId);
+    await loadHistory(state.selectedRoomId);
+  } catch (error) {
+    addEvent(error.message);
+  }
+}
+
+async function createApiKey() {
+  els.settingsError.textContent = "";
+  try {
+    const response = await fetch("/api/keys", { method: "POST" });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(body.error || "HTTP signup is not enabled");
+    }
+    state.apiKey = body.key || "";
+    els.apiKeyInput.value = state.apiKey;
+    saveSettings();
+    els.settingsError.textContent = "Key created and saved.";
+  } catch (error) {
+    els.settingsError.textContent = error.message;
+  }
+}
+
+function openSettings() {
+  els.wsUrlInput.value = state.wsUrl || defaultWsUrl();
+  els.apiKeyInput.value = state.apiKey || "";
+  els.agentNameInput.value = state.agentName || "Web Client";
+  els.settingsError.textContent = "";
+  els.settingsDialog.showModal();
+}
+
+function scrollToBottom() {
+  requestAnimationFrame(() => {
+    els.messageScroll.scrollTop = els.messageScroll.scrollHeight;
+  });
+}
+
+function autosizeComposer() {
+  els.messageInput.style.height = "auto";
+  els.messageInput.style.height = `${Math.min(150, els.messageInput.scrollHeight)}px`;
+}
+
+function bindEvents() {
+  els.settingsButton.addEventListener("click", openSettings);
+  els.newRoomButton.addEventListener("click", () => {
+    els.newRoomName.value = "";
+    els.newRoomDescription.value = "";
+    els.newRoomPublic.checked = true;
+    els.newRoomDialog.showModal();
+    els.newRoomName.focus();
+  });
+  els.refreshButton.addEventListener("click", () => {
+    refreshRooms();
+    refreshAgents();
+  });
+  els.sendButton.addEventListener("click", () => sendComposer(false));
+  els.thinkingButton.addEventListener("click", () => sendComposer(true));
+  els.createKeyButton.addEventListener("click", createApiKey);
+  els.presenceButton.addEventListener("click", async () => {
+    const order = ["waiting", "working", "thinking", "idle"];
+    state.presence = order[(order.indexOf(state.presence) + 1) % order.length];
+    els.presenceButton.textContent = state.presence[0].toUpperCase() + state.presence.slice(1);
+    if (state.connected) {
+      await send("set_presence", { status: state.presence }).catch((error) => addEvent(error.message));
+      refreshAgents();
+    }
+  });
+  els.roomSearch.addEventListener("input", () => {
+    state.filter = els.roomSearch.value;
+    renderRooms();
+  });
+  els.messageInput.addEventListener("input", autosizeComposer);
+  els.messageInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      sendComposer(false);
+    }
+  });
+  els.settingsForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    connect()
+      .then(() => els.settingsDialog.close())
+      .catch((error) => {
+        els.settingsError.textContent = error.message;
+      });
+  });
+  els.newRoomForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    createRoom();
+  });
+}
+
+bindEvents();
+setConnected(false, "Disconnected");
+renderAll();
+
+els.wsUrlInput.value = state.wsUrl;
+els.apiKeyInput.value = state.apiKey;
+els.agentNameInput.value = state.agentName;
+
+if (state.apiKey || new URLSearchParams(window.location.search).has("connect")) {
+  connect().catch(() => openSettings());
+} else {
+  openSettings();
+}

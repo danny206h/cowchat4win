@@ -1,0 +1,18 @@
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editor folders
+.vs/
+.vscode/
+.idea/
+
+# Build output
+bin/
+obj/
+dist/
+build/
+
+# Logs
+*.log

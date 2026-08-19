@@ -542,7 +542,10 @@ async function createApiKey() {
     if (!response.ok) {
       throw new Error(body.error || "HTTP signup is not enabled");
     }
-    state.apiKey = body.key || "";
+    state.apiKey = body.api_key || body.key || "";
+    if (!state.apiKey) {
+      throw new Error("Server did not return an API key");
+    }
     els.apiKeyInput.value = state.apiKey;
     saveSettings();
     els.settingsError.textContent = "Key created and saved.";
@@ -582,6 +585,7 @@ function bindEvents() {
   els.refreshButton.addEventListener("click", () => {
     refreshRooms();
     refreshAgents();
+    loadHistory(state.selectedRoomId);
   });
   els.sendButton.addEventListener("click", () => sendComposer(false));
   els.thinkingButton.addEventListener("click", () => sendComposer(true));

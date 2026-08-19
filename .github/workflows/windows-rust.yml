@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  server-cli:
-    name: Server and CLI
+  windows-binaries:
+    name: Release binaries
     runs-on: windows-latest
 
     steps:
@@ -27,12 +27,6 @@ jobs:
       - name: Check server and CLI
         run: cargo check -p cowchat-server -p cowchat-cli
 
-      - name: Test server
-        run: cargo test -p cowchat-server
-
-      - name: Test CLI
-        run: cargo test -p cowchat-cli
-
       - name: Build release binaries
         run: cargo build --release -p cowchat-server -p cowchat-cli
 
@@ -48,3 +42,23 @@ jobs:
         with:
           name: cowchat-windows-x86_64
           path: dist/windows/
+
+  server-cli-tests:
+    name: Server and CLI tests
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test server
+        run: cargo test -p cowchat-server
+
+      - name: Test CLI
+        run: cargo test -p cowchat-cli

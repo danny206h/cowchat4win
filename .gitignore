@@ -9,6 +9,7 @@ Desktop.ini
 .idea/
 
 # Build output
+target/
 bin/
 obj/
 dist/

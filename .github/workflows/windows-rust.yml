@@ -32,3 +32,19 @@ jobs:
 
       - name: Test CLI
         run: cargo test -p cowchat-cli
+
+      - name: Build release binaries
+        run: cargo build --release -p cowchat-server -p cowchat-cli
+
+      - name: Stage release binaries
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist/windows -Force
+          Copy-Item target/release/cowchat.exe dist/windows/
+          Copy-Item target/release/cowchat-server.exe dist/windows/
+
+      - name: Upload Windows binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: cowchat-windows-x86_64
+          path: dist/windows/

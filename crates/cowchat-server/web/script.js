@@ -75,6 +75,9 @@ const state = {
   messages: new Map(),
   joinedRooms: new Set(),
   unread: new Map(),
+  syncTimer: null,
+  syncingHistory: false,
+  syncTick: 0,
   selectedRoomId: "lobby",
   wsUrl: existing.wsUrl || defaultWsUrl(),
   apiKey: existing.apiKey || "",
@@ -332,16 +335,45 @@ async function ensureJoined(roomId) {
 }
 
 async function loadHistory(roomId) {
-  if (!roomId || !state.connected) return;
+  if (!roomId || !state.connected || state.syncingHistory) return;
+  state.syncingHistory = true;
   try {
     const response = await send("get_history", { room_id: roomId, limit: 100 });
     const messages = response.payload?.messages || [];
+    const previous = state.messages.get(roomId) || [];
+    const previousLast = previous[previous.length - 1]?.message_id;
+    const nextLast = messages[messages.length - 1]?.message_id;
     state.messages.set(roomId, messages);
     renderMessages();
-    scrollToBottom();
+    if (previousLast !== nextLast) {
+      scrollToBottom();
+    }
   } catch (error) {
     addEvent(error.message);
+  } finally {
+    state.syncingHistory = false;
   }
+}
+
+function startSyncLoop() {
+  stopSyncLoop();
+  state.syncTimer = window.setInterval(() => {
+    if (!state.connected || document.hidden) return;
+    state.syncTick += 1;
+    loadHistory(state.selectedRoomId);
+    if (state.syncTick % 4 === 0) {
+      refreshRooms();
+      refreshAgents();
+    }
+  }, 2500);
+}
+
+function stopSyncLoop() {
+  if (state.syncTimer) {
+    window.clearInterval(state.syncTimer);
+    state.syncTimer = null;
+  }
+  state.syncingHistory = false;
 }
 
 async function selectRoom(roomId) {
@@ -455,6 +487,7 @@ async function connect() {
         await send("set_presence", { status: state.presence });
         await refreshRooms();
         await refreshAgents();
+        startSyncLoop();
         renderAll();
         resolve();
       } catch (error) {
@@ -478,6 +511,7 @@ async function connect() {
       });
       state.pending.clear();
       state.joinedRooms.clear();
+      stopSyncLoop();
       setConnected(false, "Disconnected");
       renderAll();
     });

@@ -116,7 +116,29 @@ fn origin_allowed(headers: &HeaderMap, allowed: &[String]) -> bool {
     else {
         return true;
     };
-    allowed.iter().any(|candidate| candidate == origin)
+
+    if allowed.iter().any(|candidate| candidate == origin) {
+        return true;
+    }
+
+    allowed.is_empty() && origin_matches_host(origin, headers)
+}
+
+fn origin_matches_host(origin: &str, headers: &HeaderMap) -> bool {
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    let Some(origin_host) = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+        .and_then(|rest| rest.split('/').next())
+    else {
+        return false;
+    };
+    !origin_host.is_empty() && origin_host.eq_ignore_ascii_case(host)
 }
 
 async fn ws_handler(
@@ -900,11 +922,21 @@ mod tests {
             header::ORIGIN,
             HeaderValue::from_static("https://evil.example"),
         );
+        headers.insert(header::HOST, HeaderValue::from_static("cowchat.example"));
+        assert!(!origin_allowed(&headers, &[]));
         assert!(!origin_allowed(
             &headers,
             &["https://cowchat.example".into()]
         ));
         assert!(origin_allowed(&headers, &["https://evil.example".into()]));
+
+        let mut same_origin_headers = HeaderMap::new();
+        same_origin_headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://127.0.0.1:9230"),
+        );
+        same_origin_headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:9230"));
+        assert!(origin_allowed(&same_origin_headers, &[]));
     }
 
     #[test]

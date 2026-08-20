@@ -674,8 +674,4 @@ els.wsUrlInput.value = state.wsUrl;
 els.apiKeyInput.value = state.apiKey;
 els.agentNameInput.value = state.agentName;
 
-if (state.apiKey || new URLSearchParams(window.location.search).has("connect")) {
-  connect().catch(() => openSettings());
-} else {
-  openSettings();
-}
+connect().catch(() => openSettings());

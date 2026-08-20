@@ -122,16 +122,18 @@ fn origin_allowed(headers: &HeaderMap, allowed: &[String]) -> bool {
 async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> axum::response::Response {
     if !origin_allowed(&headers, &state.allowed_origins) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    ws.on_upgrade(move |socket| handle_ws_connection(socket, state))
+    let allow_keyless = peer.ip().is_loopback();
+    ws.on_upgrade(move |socket| handle_ws_connection(socket, state, allow_keyless))
         .into_response()
 }
 
-async fn handle_ws_connection(ws: WebSocket, state: AppState) {
+async fn handle_ws_connection(ws: WebSocket, state: AppState, allow_keyless: bool) {
     let (mut ws_sender, mut ws_receiver) = ws.split();
 
     // Create an in-memory duplex stream (bidirectional pipe)
@@ -207,7 +209,7 @@ async fn handle_ws_connection(ws: WebSocket, state: AppState) {
             vote_mgr,
             api_key,
             no_auth,
-            false,
+            allow_keyless,
             rate_limiter,
             reconnect_mgr,
             task_mgr,
@@ -651,6 +653,41 @@ mod tests {
         assert!(
             matches!(close, Some(Ok(ClientMessage::Close(_))) | None),
             "registration error must precede connection close, got {close:?}"
+        );
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn loopback_websocket_can_register_without_key() {
+        let (server, addr) = start_test_web_server(test_state()).await;
+        let (mut socket, _) = connect_async(format!("ws://{addr}/ws")).await.unwrap();
+        let register = Frame {
+            id: Some("keyless-loopback-registration".into()),
+            reply_to: None,
+            frame_type: FrameType::Register,
+            payload: serde_json::to_value(RegisterPayload {
+                key: String::new(),
+                agent_id: Some("keyless-web-agent".into()),
+                name: "keyless web".into(),
+                capabilities: vec!["web-ui".into()],
+                reconnect: false,
+                protocol_version: Some(cowchat_core::PROTOCOL_VERSION),
+            })
+            .unwrap(),
+        };
+        socket
+            .send(ClientMessage::Text(
+                register.to_line().unwrap().trim_end().to_owned().into(),
+            ))
+            .await
+            .unwrap();
+
+        let response = next_text_frame(&mut socket).await;
+        assert_eq!(response.frame_type, FrameType::Ok);
+        assert_eq!(
+            response.reply_to.as_deref(),
+            Some("keyless-loopback-registration")
         );
 
         server.abort();

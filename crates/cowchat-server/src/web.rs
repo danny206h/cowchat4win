@@ -523,7 +523,11 @@ async fn api_room_history(
 
 async fn static_handler(uri: Uri) -> impl IntoResponse {
     let path = uri.path().trim_start_matches('/');
-    let path = if path.is_empty() { "index.html" } else { path };
+    let path = if path.is_empty() || path == "dashboard.html" {
+        "index.html"
+    } else {
+        path
+    };
 
     match WebAssets::get(path) {
         Some(content) => {

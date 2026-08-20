@@ -45,6 +45,15 @@ const defaultWsUrl = () => {
   return `${scheme}//${window.location.host}/ws`;
 };
 
+const isLoopbackWsUrl = (url) => {
+  try {
+    const parsed = new URL(url);
+    return ["127.0.0.1", "localhost", "[::1]"].includes(parsed.hostname);
+  } catch {
+    return false;
+  }
+};
+
 const loadSettings = () => {
   try {
     return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
@@ -66,6 +75,7 @@ const saveSettings = () => {
 };
 
 const existing = loadSettings();
+const initialWsUrl = existing.wsUrl || defaultWsUrl();
 const state = {
   ws: null,
   connected: false,
@@ -79,8 +89,8 @@ const state = {
   syncingHistory: false,
   syncTick: 0,
   selectedRoomId: "lobby",
-  wsUrl: existing.wsUrl || defaultWsUrl(),
-  apiKey: existing.apiKey || "",
+  wsUrl: initialWsUrl,
+  apiKey: isLoopbackWsUrl(initialWsUrl) ? "" : existing.apiKey || "",
   agentName: existing.agentName || "Web Client",
   agentId:
     existing.agentId ||

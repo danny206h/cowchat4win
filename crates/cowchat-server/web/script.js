@@ -465,8 +465,11 @@ async function connect() {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(state.wsUrl);
     state.ws = ws;
+    let settled = false;
 
     const fail = (message) => {
+      if (settled) return;
+      settled = true;
       setConnected(false, message, true);
       reject(new Error(message));
     };
@@ -489,6 +492,7 @@ async function connect() {
         await refreshAgents();
         startSyncLoop();
         renderAll();
+        settled = true;
         resolve();
       } catch (error) {
         ws.close();
@@ -571,7 +575,11 @@ async function createRoom() {
 async function createApiKey() {
   els.settingsError.textContent = "";
   try {
-    const response = await fetch("/api/keys", { method: "POST" });
+    const response = await fetch("/api/keys", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(body.error || "HTTP signup is not enabled");

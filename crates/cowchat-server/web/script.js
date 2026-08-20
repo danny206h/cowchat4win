@@ -466,7 +466,10 @@ async function connect() {
   }
 
   state.wsUrl = els.wsUrlInput.value.trim() || defaultWsUrl();
-  state.apiKey = els.apiKeyInput.value.trim();
+  state.apiKey = isLoopbackWsUrl(state.wsUrl) ? "" : els.apiKeyInput.value.trim();
+  if (isLoopbackWsUrl(state.wsUrl)) {
+    els.apiKeyInput.value = "";
+  }
   state.agentName = els.agentNameInput.value.trim() || "Web Client";
   saveSettings();
   setConnected(false, "Connecting");
@@ -530,7 +533,7 @@ async function connect() {
       renderAll();
     });
 
-    ws.addEventListener("error", () => fail("Connection failed"));
+    ws.addEventListener("error", () => fail(`Connection failed: ${state.wsUrl}`));
   });
 }
 
